@@ -30,7 +30,24 @@ describe("MetaNode Token and Stake Contract Complete Test", function () {
 
     // 转移代币到质押合约
     const totalSupply = await metaNodeToken.totalSupply();
-    await metaNodeToken.transfer(await metaNodeStake.getAddress(), totalSupply);
+
+    const keepForOwner = ethers.parseEther("200000");
+    const toUser1 = ethers.parseEther("10000");
+    const toUser2 = ethers.parseEther("10000");
+    await metaNodeToken.transfer(user1.address, toUser1);
+    await metaNodeToken.transfer(user2.address, toUser2)
+    const toStake = totalSupply - keepForOwner - toUser1 - toUser2;
+    if (toStake < 0n) {
+      throw new Error("toStake became negative — check totalSupply and keepForOwner values");
+    }
+
+
+    await metaNodeToken.transfer(await metaNodeStake.getAddress(), toStake);
+    console.log("totalSupply", totalSupply.toString());
+    console.log("ownerBalance", (await metaNodeToken.balanceOf(owner.address)).toString());
+    console.log("stakeBalance", (await metaNodeToken.balanceOf(await metaNodeStake.getAddress())).toString());
+    console.log("user1Balance", (await metaNodeToken.balanceOf(user1.address)).toString());
+    console.log("user2Balance", (await metaNodeToken.balanceOf(user2.address)).toString());
   });
 
   describe("MetaNode Token Tests", function () {
@@ -44,19 +61,21 @@ describe("MetaNode Token and Stake Contract Complete Test", function () {
       await metaNodeToken.transfer(user1.address, transferAmount);
       
       const user1Balance = await metaNodeToken.balanceOf(user1.address);
-      expect(user1Balance).to.equal(transferAmount);
+      expect(user1Balance).to.equal(ethers.parseEther("10000") + transferAmount);
     });
 
     it("Should approve and transferFrom correctly", async function () {
       const approveAmount = ethers.parseEther("500");
+      // owner approve user1
       await metaNodeToken.approve(user1.address, approveAmount);
-      
+
       const allowance = await metaNodeToken.allowance(owner.address, user1.address);
       expect(allowance).to.equal(approveAmount);
 
+      // user1 使用 allowance 从 owner 转给 user2，验证是否是erc20 兼容性测试
       await metaNodeToken.connect(user1).transferFrom(owner.address, user2.address, approveAmount);
       const user2Balance = await metaNodeToken.balanceOf(user2.address);
-      expect(user2Balance).to.equal(approveAmount);
+      expect(user2Balance).to.equal(ethers.parseEther("10000") + approveAmount);
     });
   });
 
@@ -113,7 +132,7 @@ describe("MetaNode Token and Stake Contract Complete Test", function () {
       const newTotalWeight = await metaNodeStake.totalPoolWeight();
       
       expect(pool.poolWeight).to.equal(800);
-      expect(newTotalWeight).to.equal(initialWeight - 500 + 800);
+      expect(newTotalWeight).to.equal(initialWeight - 500n + 800n);
     });
   });
 
@@ -164,9 +183,26 @@ describe("MetaNode Token and Stake Contract Complete Test", function () {
 
     it("Should unstake correctly", async function () {
       const unstakeAmount = ethers.parseEther("0.5");
-      
+
+      // 确保已经到 startBlock 以后
+      let currentBlock = await ethers.provider.getBlockNumber();
+
+      while (currentBlock < 100) {
+        await ethers.provider.send("evm_mine", []);
+        currentBlock++;
+      }
+
+      // 解押
       await metaNodeStake.unstake(0, unstakeAmount);
-      
+
+      // 推进区块
+      for (let i = 0; i < 50; i++) {
+        await ethers.provider.send("evm_mine", []);
+      }
+
+      // 触发一次交互来更新奖励
+      await metaNodeStake.depositETH({ value: 0 });
+
       const userInfo = await metaNodeStake.user(0, owner.address);
       expect(userInfo.stAmount).to.equal(ethers.parseEther("0.5"));
       expect(userInfo.pendingMetaNode).to.be.gt(0);
